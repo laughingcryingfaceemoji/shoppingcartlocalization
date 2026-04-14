@@ -9,6 +9,7 @@ import javafx.scene.layout.*;
 import javafx.stage.Stage;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.util.*;
 
 /**
@@ -24,7 +25,9 @@ import java.util.*;
 public class ShoppingCartGUI extends Application {
 
     private ResourceBundle messages;
+    private Map<String, String> localizedStrings;
     private Locale currentLocale = new Locale("en", "US");
+    private boolean useDatabase = false;
     private List<ItemRow> itemRows = new ArrayList<>();
     private List<ShoppingCartCalculator.Item> items = new ArrayList<>();
 
@@ -56,11 +59,52 @@ public class ShoppingCartGUI extends Application {
     }
 
     private void loadMessages() {
+        localizedStrings = new HashMap<>();
+
+        // Try to load from database first
+        String languageCode = getLanguageCodeForLocale(currentLocale);
+        try {
+            if (DatabaseConnection.testConnection()) {
+                localizedStrings = LocalizationService.getLocalizationStrings(languageCode);
+                if (!localizedStrings.isEmpty()) {
+                    useDatabase = true;
+                    System.out.println("Loaded localization from database for language: " + languageCode);
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Database access failed, falling back to ResourceBundle: " + e.getMessage());
+        }
+
+        // Fall back to ResourceBundle
+        useDatabase = false;
         try {
             messages = ResourceBundle.getBundle("MessagesBundle", currentLocale, new Utf8Control());
         } catch (Exception e) {
             System.err.println("Error loading messages: " + e.getMessage());
             messages = ResourceBundle.getBundle("MessagesBundle", new Locale("en", "US"), new Utf8Control());
+        }
+    }
+
+    /**
+     * Gets the language code string for database queries (e.g., "en_US", "fi_FI")
+     */
+    String getLanguageCodeForLocale(Locale locale) {
+        return locale.getLanguage() + "_" + locale.getCountry();
+    }
+
+    /**
+     * Gets a localized string from the appropriate source (database or ResourceBundle)
+     */
+    private String getString(String key) {
+        if (useDatabase && localizedStrings.containsKey(key)) {
+            return localizedStrings.get(key);
+        }
+        // Fall back to ResourceBundle
+        try {
+            return messages.getString(key);
+        } catch (MissingResourceException e) {
+            return key; // Return key if not found
         }
     }
 
@@ -109,7 +153,7 @@ public class ShoppingCartGUI extends Application {
         hbox.setAlignment(Pos.CENTER_LEFT);
 
         Label label = new Label();
-        label.setText(messages.getString("label.select_language"));
+        label.setText(getString("label.select_language"));
 
         languageCombo = new ComboBox<>();
         languageCombo.getItems().addAll("English", "Suomi", "Svenska", "日本語", "العربية");
@@ -130,7 +174,8 @@ public class ShoppingCartGUI extends Application {
         return hbox;
     }
 
-    private Locale getLocaleFromSelection(String selection) {
+    // Changed from private to package-private so tests can call it
+    Locale getLocaleFromSelection(String selection) {
         switch (selection) {
             case "Suomi": return new Locale("fi", "FI");
             case "Svenska": return new Locale("sv", "SE");
@@ -145,14 +190,14 @@ public class ShoppingCartGUI extends Application {
         hbox.setAlignment(Pos.CENTER_LEFT);
 
         itemCountLabel = new Label();
-        itemCountLabel.setText(messages.getString("prompt.items"));
+        itemCountLabel.setText(getString("prompt.items"));
 
         itemCountSpinner = new Spinner<>(1, 100, 1);
         itemCountSpinner.setPrefWidth(80);
         itemCountSpinner.setEditable(true);
 
         addItemButton = new Button();
-        addItemButton.setText(messages.getString("button.add"));
+        addItemButton.setText(getString("button.add"));
         addItemButton.setStyle("-fx-font-size: 11; -fx-padding: 5 15;");
         addItemButton.setOnAction(event -> updateItemRows());
 
@@ -182,13 +227,13 @@ public class ShoppingCartGUI extends Application {
         hbox.setAlignment(Pos.CENTER);
 
         calculateButton = new Button();
-        calculateButton.setText(messages.getString("button.calculate"));
+        calculateButton.setText(getString("button.calculate"));
         calculateButton.setStyle("-fx-font-size: 11; -fx-padding: 8 20;");
         calculateButton.setPrefWidth(120);
         calculateButton.setOnAction(event -> calculateTotal());
 
         clearButton = new Button();
-        clearButton.setText(messages.getString("button.clear"));
+        clearButton.setText(getString("button.clear"));
         clearButton.setStyle("-fx-font-size: 11; -fx-padding: 8 20;");
         clearButton.setPrefWidth(120);
         clearButton.setOnAction(event -> clearAll());
@@ -203,7 +248,7 @@ public class ShoppingCartGUI extends Application {
         hbox.setStyle("-fx-border-color: #0066cc; -fx-border-radius: 5; -fx-padding: 10; -fx-background-color: #f0f0f0;");
 
         totalLabel = new Label();
-        totalLabel.setText(messages.getString("label.total"));
+        totalLabel.setText(getString("label.total"));
         totalLabel.setStyle("-fx-font-size: 14; -fx-font-weight: bold;");
 
         totalValueLabel = new Label("0.00");
@@ -219,7 +264,7 @@ public class ShoppingCartGUI extends Application {
         itemsContainer.getChildren().clear();
 
         for (int i = 1; i <= count; i++) {
-            ItemRow row = new ItemRow(i, messages);
+            ItemRow row = new ItemRow(i, this);
             itemRows.add(row);
             itemsContainer.getChildren().add(row.createRow());
         }
@@ -234,12 +279,12 @@ public class ShoppingCartGUI extends Application {
                 int quantity = row.getQuantity();
 
                 if (price == null || price.compareTo(BigDecimal.ZERO) < 0) {
-                    showError(String.format(messages.getString("error.invalid_price")));
+                    showError(getString("error.invalid_price"));
                     return;
                 }
 
                 if (quantity < 0) {
-                    showError(String.format(messages.getString("error.invalid_quantity")));
+                    showError(getString("error.invalid_quantity"));
                     return;
                 }
 
@@ -247,7 +292,7 @@ public class ShoppingCartGUI extends Application {
                     items.add(new ShoppingCartCalculator.Item(price, quantity));
                 }
             } catch (NumberFormatException e) {
-                showError(messages.getString("error.invalid_number"));
+                showError(getString("error.invalid_number"));
                 return;
             }
         }
@@ -259,6 +304,29 @@ public class ShoppingCartGUI extends Application {
 
         BigDecimal total = ShoppingCartCalculator.calculateTotal(items);
         totalValueLabel.setText(total.toString());
+
+        // Try to save to database
+        saveCartToDatabase(items.size(), total);
+    }
+
+    /**
+     * Saves the calculated cart to the database
+     */
+    private void saveCartToDatabase(int totalItems, BigDecimal totalCost) {
+        if (!DatabaseConnection.testConnection()) {
+            System.err.println("Database not available — cannot save cart.");
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                String languageCode = getLanguageCodeForLocale(currentLocale);
+                int cartRecordId = CartService.saveCart(totalItems, totalCost, items, languageCode);
+                System.out.println("Cart saved to database with ID: " + cartRecordId);
+            } catch (SQLException e) {
+                System.err.println("Error saving cart to database: " + e.getMessage());
+            }
+        }).start();
     }
 
     private void clearAll() {
@@ -271,7 +339,7 @@ public class ShoppingCartGUI extends Application {
 
     private void showError(String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
-        alert.setTitle(messages.getString("error.invalid_number"));
+        alert.setTitle(getString("error.invalid_number"));
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
@@ -296,44 +364,44 @@ public class ShoppingCartGUI extends Application {
 
         // Update all labels
         if (itemCountLabel != null) {
-            itemCountLabel.setText(messages.getString("prompt.items"));
+            itemCountLabel.setText(getString("prompt.items"));
         }
         if (addItemButton != null) {
-            addItemButton.setText(messages.getString("button.add"));
+            addItemButton.setText(getString("button.add"));
         }
         if (calculateButton != null) {
-            calculateButton.setText(messages.getString("button.calculate"));
+            calculateButton.setText(getString("button.calculate"));
         }
         if (clearButton != null) {
-            clearButton.setText(messages.getString("button.clear"));
+            clearButton.setText(getString("button.clear"));
         }
         if (totalLabel != null) {
-            totalLabel.setText(messages.getString("label.total"));
+            totalLabel.setText(getString("label.total"));
         }
 
         // Update item rows
         for (ItemRow row : itemRows) {
-            row.updateLabels(messages);
+            row.updateLabels(this);
         }
     }
 
     /**
      * Inner class representing a single item input row
      */
-    private static class ItemRow {
+    class ItemRow {
         private int itemNumber;
-        private ResourceBundle messages;
-        private TextField priceField;
-        private Spinner<Integer> quantitySpinner;
+        private ShoppingCartGUI parentGUI;
+        TextField priceField;
+        Spinner<Integer> quantitySpinner;
         private Label itemTotalLabel;
         private Label priceLabel;
         private Label quantityLabel;
         private Label itemNumberLabel;
-        private Label itemTotalValueLabel;
+        Label itemTotalValueLabel;
 
-        public ItemRow(int itemNumber, ResourceBundle messages) {
+        public ItemRow(int itemNumber, ShoppingCartGUI parentGUI) {
             this.itemNumber = itemNumber;
-            this.messages = messages;
+            this.parentGUI = parentGUI;
         }
 
         public VBox createRow() {
@@ -347,7 +415,7 @@ public class ShoppingCartGUI extends Application {
             // Price field
             HBox priceBox = new HBox(10);
             priceBox.setAlignment(Pos.CENTER_LEFT);
-            priceLabel = new Label(messages.getString("label.price"));
+            priceLabel = new Label(parentGUI.getString("label.price"));
             priceField = new TextField();
             priceField.setPromptText("0.00");
             priceField.setPrefWidth(100);
@@ -356,7 +424,7 @@ public class ShoppingCartGUI extends Application {
             // Quantity spinner
             HBox quantityBox = new HBox(10);
             quantityBox.setAlignment(Pos.CENTER_LEFT);
-            quantityLabel = new Label(messages.getString("label.quantity"));
+            quantityLabel = new Label(parentGUI.getString("label.quantity"));
             quantitySpinner = new Spinner<>(0, 1000, 0);
             quantitySpinner.setPrefWidth(100);
             quantitySpinner.setEditable(true);
@@ -365,7 +433,7 @@ public class ShoppingCartGUI extends Application {
             // Item total
             HBox totalBox = new HBox(10);
             totalBox.setAlignment(Pos.CENTER_LEFT);
-            itemTotalLabel = new Label(messages.getString("label.item_total"));
+            itemTotalLabel = new Label(parentGUI.getString("label.item_total"));
             itemTotalLabel.setStyle("-fx-font-weight: bold;");
             itemTotalValueLabel = new Label("0.00");
             itemTotalValueLabel.setStyle("-fx-text-fill: #0066cc; -fx-font-weight: bold;");
@@ -380,20 +448,20 @@ public class ShoppingCartGUI extends Application {
             return rowBox;
         }
 
-        public void updateLabels(ResourceBundle newMessages) {
-            this.messages = newMessages;
+        public void updateLabels(ShoppingCartGUI parentGUI) {
+            this.parentGUI = parentGUI;
             if (priceLabel != null) {
-                priceLabel.setText(messages.getString("label.price"));
+                priceLabel.setText(parentGUI.getString("label.price"));
             }
             if (quantityLabel != null) {
-                quantityLabel.setText(messages.getString("label.quantity"));
+                quantityLabel.setText(parentGUI.getString("label.quantity"));
             }
             if (itemTotalLabel != null) {
-                itemTotalLabel.setText(messages.getString("label.item_total"));
+                itemTotalLabel.setText(parentGUI.getString("label.item_total"));
             }
         }
 
-        private void updateItemTotal() {
+        public void updateItemTotal() {
             try {
                 String priceStr = priceField.getText().trim();
                 if (priceStr.isEmpty()) {
@@ -428,4 +496,3 @@ public class ShoppingCartGUI extends Application {
         }
     }
 }
-
