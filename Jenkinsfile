@@ -12,11 +12,13 @@ pipeline {
         DOCKER_IMAGE_TAG = 'v1'
     }
 
+
+
     stages {
 
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/laughingcryingfaceemoji/shoppingcartlocalization.git'
+                 git branch: 'main', url: 'https://github.com/laughingcryingfaceemoji/shoppingcartlocalization.git'
             }
         }
 
@@ -25,26 +27,28 @@ pipeline {
                 bat 'mvn clean install'
             }
         }
+        stage('SonarQube Analysis') {
+                    steps {
+                        dir('w1') {
+                            withSonarQubeEnv('SonarQubeServer') {
+                                withCredentials([string(credentialsId: 'sonar-qube', variable: 'SONAR_TOKEN')]) {
+                                    bat 'mvn sonar:sonar -Dsonar.token=%SONAR_TOKEN%'
+                                }
+                            }
+                        }
+                    }
+                }
 
-        stage('Generate Coverage Report') {
+        stage('Generate Report') {
             steps {
                 bat 'mvn jacoco:report'
             }
         }
 
+
         stage('Publish Coverage Report') {
             steps {
                 jacoco()
-            }
-        }
-
-        stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('SonarQubeServer') {
-                    withCredentials([string(credentialsId: 'sonar-qube', variable: 'SONAR_TOKEN')]) {
-                        bat 'mvn sonar:sonar -Dsonar.token=%SONAR_TOKEN%'
-                    }
-                }
             }
         }
 
@@ -65,5 +69,8 @@ pipeline {
                 }
             }
         }
+
+
+
     }
 }
